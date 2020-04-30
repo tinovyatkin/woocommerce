@@ -344,37 +344,60 @@ class WC_Widget_Layered_Nav extends WC_Widget {
 	protected function get_filtered_term_product_counts( $term_ids, $taxonomy, $query_type ) {
 		global $wpdb;
 
-		$tax_query  = WC_Query::get_main_tax_query();
-		$meta_query = WC_Query::get_main_meta_query();
+		$main_tax_query = WC_Query::get_main_tax_query();
+		$meta_query     = WC_Query::get_main_meta_query();
 
-		if ( 'or' === $query_type ) {
-			foreach ( $tax_query as $key => $query ) {
-				if ( is_array( $query ) && $taxonomy === $query['taxonomy'] ) {
-					unset( $tax_query[ $key ] );
+		$variable_tax_query_sql     = array( 'where' => '' );
+		$non_variable_tax_query_sql = array( 'where' => '' );
+
+		foreach ( $main_tax_query as $key => $query ) {
+			if ( is_array( $query ) && $taxonomy === $query['taxonomy'] ) {
+				if ( 'and' === $query_type ) {
+					$non_variable_tax_query_sql = $this->convert_tax_query_to_sql( array( $query ) );
+					$variable_tax_query_sql     = $this->get_extra_tax_query_sql( $taxonomy, $query['terms'], 'IN' );
 				}
+				unset( $main_tax_query[ $key ] );
 			}
 		}
 
-		$meta_query     = new WP_Meta_Query( $meta_query );
-		$tax_query      = new WP_Tax_Query( $tax_query );
-		$meta_query_sql = $meta_query->get_sql( 'post', $wpdb->posts, 'ID' );
-		$tax_query_sql  = $tax_query->get_sql( $wpdb->posts, 'ID' );
+		$exclude_variable_products_tax_query_sql = $this->get_extra_tax_query_sql( 'product_type', array( 'variable' ), 'NOT IN' );
+
+		$meta_query_sql     = ( new WP_Meta_Query( $meta_query ) )->get_sql( 'post', $wpdb->posts, 'ID' );
+		$main_tax_query_sql = $this->convert_tax_query_to_sql( $main_tax_query );
+		$term_ids_sql       = '(' . implode( ',', array_map( 'absint', $term_ids ) ) . ')';
 
 		// Generate query.
 		$query           = array();
 		$query['select'] = "SELECT COUNT( DISTINCT {$wpdb->posts}.ID ) as term_count, terms.term_id as term_count_id";
 		$query['from']   = "FROM {$wpdb->posts}";
 		$query['join']   = "
-			INNER JOIN {$wpdb->term_relationships} AS term_relationships ON {$wpdb->posts}.ID = term_relationships.object_id
+			INNER JOIN {$wpdb->term_relationships} ON {$wpdb->posts}.ID = {$wpdb->term_relationships}.object_id
 			INNER JOIN {$wpdb->term_taxonomy} AS term_taxonomy USING( term_taxonomy_id )
 			INNER JOIN {$wpdb->terms} AS terms USING( term_id )
-			" . $tax_query_sql['join'] . $meta_query_sql['join'];
+			{$main_tax_query_sql['join']} {$meta_query_sql['join']}"; // Not an omission, really no more JOINs required.
 
 		$query['where'] = "
-			WHERE {$wpdb->posts}.post_type IN ( 'product' )
-			AND {$wpdb->posts}.post_status = 'publish'"
-			. $tax_query_sql['where'] . $meta_query_sql['where'] .
-			'AND terms.term_id IN (' . implode( ',', array_map( 'absint', $term_ids ) ) . ')';
+			WHERE
+			{$wpdb->posts}.post_status = 'publish'
+			{$main_tax_query_sql['where']} {$meta_query_sql['where']}
+			AND (
+				(
+					{$wpdb->posts}.post_type = 'product'
+					{$exclude_variable_products_tax_query_sql['where']}
+					{$non_variable_tax_query_sql['where']}
+				)
+				OR
+				(
+					{$wpdb->posts}.post_type = 'product_variation'
+				    AND NOT EXISTS (
+				        SELECT ID FROM {$wpdb->posts} AS parent
+				        WHERE parent.ID = {$wpdb->posts}.post_parent AND parent.post_status NOT IN ('publish')
+				    )
+					{$variable_tax_query_sql['where']}
+				)
+			)
+			{$main_tax_query_sql['where']} {$meta_query_sql['where']}
+			AND terms.term_id IN {$term_ids_sql}";
 
 		$search = WC_Query::get_main_search_query_sql();
 		if ( $search ) {
@@ -406,6 +429,43 @@ class WC_Widget_Layered_Nav extends WC_Widget {
 		}
 
 		return array_map( 'absint', (array) $cached_counts[ $query_hash ] );
+	}
+
+	/**
+	 * Get a tax query SQL for a given set of taxonomy, terms and operator.
+	 * Uses an intermediate WP_Tax_Query object.
+	 *
+	 * @param string $taxonomy Taxonomy name.
+	 * @param array  $terms Terms to include in the query.
+	 * @param string $operator Query operator, as supported by WP_Tax_Query; e.g. "NOT IN".
+	 *
+	 * @return array
+	 */
+	private function get_extra_tax_query_sql( $taxonomy, $terms, $operator ) {
+		$query = array(
+			array(
+				'taxonomy'         => $taxonomy,
+				'field'            => 'slug',
+				'terms'            => $terms,
+				'operator'         => $operator,
+				'include_children' => false,
+			),
+		);
+
+		return $this->convert_tax_query_to_sql( $query );
+	}
+
+	/**
+	 * Convert a tax query array to SQL using an intermediate WP_Tax_Query object.
+	 *
+	 * @param array $query Query array in the same format accepted by WP_Tax_Query constructor.
+	 *
+	 * @return array Query SQL as returned by WP_Tax_Query->get_sql.
+	 */
+	private function convert_tax_query_to_sql( $query ) {
+		global $wpdb;
+
+		return ( new WP_Tax_Query( $query ) )->get_sql( $wpdb->posts, 'ID' );
 	}
 
 	/**

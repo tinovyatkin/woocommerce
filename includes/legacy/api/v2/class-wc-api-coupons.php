@@ -30,7 +30,7 @@ class WC_API_Coupons extends WC_API_Resource {
 	 * @param array $routes
 	 * @return array
 	 */
-	public function register_routes( $routes ) {
+				public function register_routes( $routes ) {
 
 		# GET/POST /coupons
 		$routes[ $this->base ] = array(

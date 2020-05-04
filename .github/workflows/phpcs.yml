@@ -1,5 +1,6 @@
 name: "CI"
-on: # rebuild any PRs and main branch changes
+
+on:
   pull_request:
     paths:
       - "**.php"
@@ -25,4 +26,4 @@ jobs:
         with:
           files: "**.php"
           phpcs_path: php phpcs.phar
-          standard: "phpcs.xml"
+          standard: phpcs.xml

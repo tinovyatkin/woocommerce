@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 class WC_API_Coupons extends WC_API_Resource {
 
 	/** @var string $base the route base */
-	protected $base = '/coupons';
+				protected $base = '/coupons';
 
 	/**
 	 * Register the routes for this class
